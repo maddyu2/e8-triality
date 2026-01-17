@@ -1,0 +1,34 @@
+0000000000000000000000000000000000000000 da69180dc6861c0be4b060cb5a54a54f2f92a336 Madra Ullrich <maddy.ullrich@gmail.com> 1768617033 -0800	commit (initial): Initial commit: Add README to E8 Triality project
+da69180dc6861c0be4b060cb5a54a54f2f92a336 da69180dc6861c0be4b060cb5a54a54f2f92a336 Madra Ullrich <maddy.ullrich@gmail.com> 1768617084 -0800	Branch: renamed refs/heads/main to refs/heads/main
+da69180dc6861c0be4b060cb5a54a54f2f92a336 3b341f9cc6db18c7d3e08fdae9cd0985bb1f83b2 Madra Ullrich <maddy.ullrich@gmail.com> 1768620419 -0800	commit: Add test fusion sim to check push
+3b341f9cc6db18c7d3e08fdae9cd0985bb1f83b2 1ae1f794bc84793e43702df766d572af511ccafb Madra Ullrich <maddy.ullrich@gmail.com> 1768629855 -0800	commit: ok
+1ae1f794bc84793e43702df766d572af511ccafb 1a3ba6a32e0dda89996293702f13955c6bf20057 Madra Ullrich <maddy.ullrich@gmail.com> 1768630285 -0800	commit: Add fusion e8 ion quant sim script
+1a3ba6a32e0dda89996293702f13955c6bf20057 69b137d71cec11e22d0fbc09d1cc36ff382f8ef3 Madra Ullrich <maddy.ullrich@gmail.com> 1768630619 -0800	commit: okAdd fusion e8 ion quant sim script
+69b137d71cec11e22d0fbc09d1cc36ff382f8ef3 ff073bffc471dd6519ef58d54867054fe6965021 Madra Ullrich <maddy.ullrich@gmail.com> 1768630662 -0800	commit: Initial commit of drive upload temp files
+ff073bffc471dd6519ef58d54867054fe6965021 7c1aa5e1d17e209fbfaae3918e65e95d75a371a5 Madra Ullrich <maddy.ullrich@gmail.com> 1768630716 -0800	commit: ok
+7c1aa5e1d17e209fbfaae3918e65e95d75a371a5 c222e56e3102574596481b3e088c7a85b0713edf Madra Ullrich <maddy.ullrich@gmail.com> 1768631243 -0800	commit: Initial project setup: Add README, folder structure, and first wave of GPU-ready sims
+c222e56e3102574596481b3e088c7a85b0713edf 169ca2756841f15d0b37f1f7c946a754e9847cd6 Madra Ullrich <maddy.ullrich@gmail.com> 1768631353 -0800	commit: Initial project setup: Add README, folder structure, and first wave of GPU-ready sims
+169ca2756841f15d0b37f1f7c946a754e9847cd6 2d94abd19e77df46f95d85fcae34fb165d5d65fd Madra Ullrich <maddy.ullrich@gmail.com> 1768631721 -0800	commit: Add uploaded files to .tmp.driveupload directory
+2d94abd19e77df46f95d85fcae34fb165d5d65fd e8565d79771fc96737abcc6e38ff33cc5a64daf0 Madra Ullrich <maddy.ullrich@gmail.com> 1768631943 -0800	commit: Add uploaded files
+e8565d79771fc96737abcc6e38ff33cc5a64daf0 ad301bf813531ca67daf6319d527d082ad2f78c1 Madra Ullrich <maddy.ullrich@gmail.com> 1768667281 -0800	commit: upload commit message
+ad301bf813531ca67daf6319d527d082ad2f78c1 cc1a27c3701dbef0f8bcf894e212db4bf7465183 Madra Ullrich <maddy.ullrich@gmail.com> 1768667473 -0800	commit: update drive upload temp files
+cc1a27c3701dbef0f8bcf894e212db4bf7465183 d1832d4a0270f52e03d665b30cb25569613bcd5a Madra Ullrich <maddy.ullrich@gmail.com> 1768667508 -0800	commit: update drive upload temp files
+d1832d4a0270f52e03d665b30cb25569613bcd5a 73d8851ebd6975b1c27cd0b0f252eeb085cb0529 Madra Ullrich <maddy.ullrich@gmail.com> 1768667558 -0800	commit: update drive upload temp files
+73d8851ebd6975b1c27cd0b0f252eeb085cb0529 21debc099475db3b431ae943d5cc51960e6bc43b Madra Ullrich <maddy.ullrich@gmail.com> 1768667594 -0800	commit: Add Tesla application folder structure for battery, charging, energy, and autonomy sims
+21debc099475db3b431ae943d5cc51960e6bc43b 60938d4732a3fba1b5e44cd2a156db51305afbb7 Madra Ullrich <maddy.ullrich@gmail.com> 1768668320 -0800	commit: update drive upload temp files
+60938d4732a3fba1b5e44cd2a156db51305afbb7 29dc05436e8dcd44854c8bec48ab68b8f4d3300c Madra Ullrich <maddy.ullrich@gmail.com> 1768669363 -0800	commit: Add new simulation files
+29dc05436e8dcd44854c8bec48ab68b8f4d3300c 356610f446c5a84703fd48f39e4588ce8ec4dbe0 Madra Ullrich <maddy.ullrich@gmail.com> 1768670981 -0800	commit: used branch 'main' to commit changes.
+356610f446c5a84703fd48f39e4588ce8ec4dbe0 b944024a0a10429ad757b67341fe650187bed724 Madra Ullrich <maddy.ullrich@gmail.com> 1768671030 -0800	commit: used branch 'main' to commit changes.
+b944024a0a10429ad757b67341fe650187bed724 271d2021c88413ac5c72cc9b2afe06d461de3054 Madra Ullrich <maddy.ullrich@gmail.com> 1768671335 -0800	commit: commit adding multiple drive upload temp files
+271d2021c88413ac5c72cc9b2afe06d461de3054 fe993b4915435f16a166d438189f4b23c91ee369 Madra Ullrich <maddy.ullrich@gmail.com> 1768671435 -0800	commit: cleanup driveupload temp files
+fe993b4915435f16a166d438189f4b23c91ee369 041cff62ab89a938cc4b2cc2b735078213fadc90 Madra Ullrich <maddy.ullrich@gmail.com> 1768671867 -0800	commit: Add more simulation files
+041cff62ab89a938cc4b2cc2b735078213fadc90 e352914d7ce636fff56b3d242b8085b9150283bb Madra Ullrich <maddy.ullrich@gmail.com> 1768684883 -0800	commit: added large batch of fusion simulation files
+e352914d7ce636fff56b3d242b8085b9150283bb 09c3c272029efe27c8cd82d0f5efad8a5dce46ee Madra Ullrich <maddy.ullrich@gmail.com> 1768685168 -0800	commit: git add
+09c3c272029efe27c8cd82d0f5efad8a5dce46ee f0fa04779d1ed8886d4308d7151a4c698f2924ff Madra Ullrich <maddy.ullrich@gmail.com> 1768685202 -0800	commit: commit
+f0fa04779d1ed8886d4308d7151a4c698f2924ff d2c155c3355901d82a7542e07d26f6b5f3e03419 Madra Ullrich <maddy.ullrich@gmail.com> 1768685251 -0800	commit: git add
+d2c155c3355901d82a7542e07d26f6b5f3e03419 63126675e2b61d0927fe94caae259b7daff55b01 Madra Ullrich <maddy.ullrich@gmail.com> 1768685270 -0800	commit: git add
+63126675e2b61d0927fe94caae259b7daff55b01 d0635518cfb786ef634b9130e7650b61563f214a Madra Ullrich <maddy.ullrich@gmail.com> 1768685300 -0800	commit: git add
+d0635518cfb786ef634b9130e7650b61563f214a 818d9378623f73a264914831c8a1354f1a852ca6 Madra Ullrich <maddy.ullrich@gmail.com> 1768685435 -0800	commit: add git
+818d9378623f73a264914831c8a1354f1a852ca6 c4472fb80ab79ad4ccb87b16a2c82777c5a2017f Madra Ullrich <maddy.ullrich@gmail.com> 1768685451 -0800	commit: add git
+c4472fb80ab79ad4ccb87b16a2c82777c5a2017f 624f52071165c8d8dfdae3564cda64aec05e255c Madra Ullrich <maddy.ullrich@gmail.com> 1768685620 -0800	commit: add git
+624f52071165c8d8dfdae3564cda64aec05e255c 783401d7d50009940b79eb4c20c0abcaf3ff13ce Madra Ullrich <maddy.ullrich@gmail.com> 1768685658 -0800	commit: add git
