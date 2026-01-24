@@ -1,0 +1,17 @@
+class Grok5Layer(nn.Module):
+    def __init__(self, d_model=240, n_heads=3):
+        super().__init__()
+        self.attn = nn.MultiheadAttention(d_model, n_heads, batch_first=True)
+        self.triality_reg = E8TrialitySparseRegularizer(d_model, n_heads)
+        self.ffn = nn.Sequential(...)  # your feed-forward
+
+    def forward(self, x, mask=None):
+        attn_out, _ = self.attn(x, x, x, attn_mask=mask)
+        x = x + attn_out
+        
+        # Apply triality regularizer on attended output
+        x = self.triality_reg(x, mask=mask)
+        
+        ffn_out = self.ffn(x)
+        x = x + ffn_out
+        return x
