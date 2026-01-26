@@ -4,6 +4,9 @@ from torch.optim.lr_scheduler import CosineAnnealingLR
 import numpy as np
 import matplotlib.pyplot as plt
 
+# ────────────────────────────────────────────────
+# CONFIG
+# ────────────────────────────────────────────────
 device = 'cuda' if torch.cuda.is_available() else 'cpu'
 triality = 3
 dim = 240
@@ -11,19 +14,27 @@ latent_dim = 8
 seq_len = 1024
 noise_scale = 0.002
 batch_size = 64
-epochs = 3000000
+epochs = 3000000  # reduce to 5000–10000 for quick local test
 
-# Multi-scale electron/ion turbulence (GENE-like)
+# ────────────────────────────────────────────────
+# Data: Multi-scale electron/ion turbulence (GENE-like proxies)
+# a/L_Te = normalized electron temperature gradient
+# a/L_Ti = normalized ion temperature gradient
+# scale_sep = electron/ion scale separation factor
+# multi_sym = multi-scale symmetry/invariance proxy
+# ────────────────────────────────────────────────
+
 a_L_Te = torch.linspace(1.0, 10.0, batch_size * seq_len, device=device).view(batch_size, seq_len, 1)
 a_L_Ti = torch.linspace(0.5, 5.0, batch_size * seq_len, device=device).view(batch_size, seq_len, 1)
 scale_sep = torch.linspace(0.1, 1.0, batch_size * seq_len, device=device).view(batch_size, seq_len, 1)
-
 multi_sym = torch.linspace(0.85, 1.0, batch_size * seq_len, device=device).view(batch_size, seq_len, 1)
 
 real_data = torch.cat([a_L_Te, a_L_Ti, scale_sep, multi_sym], dim=-1)\
              .repeat(1, 1, dim // 4) * torch.randn(batch_size, seq_len, dim, device=device) * noise_scale
 
-# E8 roots function (same in all)
+# ────────────────────────────────────────────────
+# E8 240-root lattice
+# ────────────────────────────────────────────────
 def get_e8_roots():
     roots = []
     for i in range(8):
@@ -41,6 +52,9 @@ def get_e8_roots():
 
 e8_roots = get_e8_roots().to(device)
 
+# ────────────────────────────────────────────────
+# Triality Rotary Layer
+# ────────────────────────────────────────────────
 class MultiScaleRotary(nn.Module):
     def __init__(self):
         super().__init__()
@@ -54,6 +68,9 @@ class MultiScaleRotary(nn.Module):
         pump = 0.8 * torch.sin(step * 0.006 * 2 * np.pi)
         return x * (emb.cos() + pump) + torch.roll(x, shifts=1, dims=-1) * emb.sin()
 
+# ────────────────────────────────────────────────
+# E8 Model
+# ────────────────────────────────────────────────
 class E8MultiScaleITER(nn.Module):
     def __init__(self, depth=256):
         super().__init__()
@@ -69,8 +86,11 @@ class E8MultiScaleITER(nn.Module):
             x = x + self.norm(attn)
         return torch.sigmoid(self.head(x.mean(dim=1)))
 
+# ────────────────────────────────────────────────
+# Training
+# ────────────────────────────────────────────────
 model = E8MultiScaleITER().to(device)
-opt = torch.optim.AdamW(model.parameters(), lr=4e-5)
+opt = torch.optim.AdamW(model.parameters(), lr=4e-5, weight_decay=1e-10)
 scheduler = CosineAnnealingLR(opt, T_max=epochs)
 loss_fn = nn.MSELoss()
 
@@ -82,6 +102,7 @@ for epoch in range(epochs):
     prec = model(real_data, epoch)
     loss = loss_fn(prec, torch.ones_like(prec))
     loss.backward()
+    torch.nn.utils.clip_grad_norm_(model.parameters(), 1e6)
     opt.step()
     scheduler.step()
 
@@ -91,9 +112,13 @@ for epoch in range(epochs):
         e = ent.mean().item()
         prec_hist.append(p)
         ent_hist.append(e)
-        print(f"Epoch {epoch:5d} | Prec {p:.6f} | Ent {e:.6f}")
+        print(f"Epoch {epoch:5d} | Precision {p:.6f} | Entropy {e:.6f}")
 
+# ────────────────────────────────────────────────
+# Convergence Plots & Save
+# ────────────────────────────────────────────────
 plt.figure(figsize=(12,5))
+
 plt.subplot(1,2,1)
 plt.plot(prec_hist, label='Precision')
 plt.title("Precision Convergence")
@@ -114,6 +139,6 @@ plt.tight_layout()
 plt.savefig("multi_scale_iter_precision_entropy.png", dpi=300, bbox_inches='tight')
 plt.show()
 
-print("Saved: multi_scale_iter_precision_entropy.png")
+print("Plots saved as multi_scale_iter_precision_entropy.png")
 print("Final precision:", prec_hist[-1])
 print("Final entropy:", ent_hist[-1])
