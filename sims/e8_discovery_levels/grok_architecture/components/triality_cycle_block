@@ -1,0 +1,109 @@
+import torch
+import torch.nn as nn
+import torch.optim as optim
+import torchvision
+import torchvision.transforms as transforms
+from torch.utils.data import DataLoader
+
+# Paste your TrialityCycleBlock class here (or import from gist if you save locally)
+# For now, assume it's defined in the same file or copied in
+class TrialityCycleBlock(nn.Module):
+    # ... (copy the full class from your gist here)
+
+# Tiny ViT proxy (very small for speed)
+class TinyViT(nn.Module):
+    def __init__(self, img_size=32, patch_size=8, dim=64, depth=3, heads=4, mlp_dim=128, num_classes=10, use_triality=False):
+        super().__init__()
+        self.patch_size = patch_size
+        num_patches = (img_size // patch_size) ** 2
+        self.patch_embed = nn.Conv2d(3, dim, kernel_size=patch_size, stride=patch_size)
+        self.pos_embed = nn.Parameter(torch.randn(1, num_patches + 1, dim))  # +1 for cls token
+        self.cls_token = nn.Parameter(torch.randn(1, 1, dim))
+        
+        self.layers = nn.ModuleList([])
+        for _ in range(depth):
+            if use_triality:
+                # Replace standard FFN with triality block
+                ffn = TrialityCycleBlock(dim=dim, hidden=mlp_dim)
+            else:
+                ffn = nn.Sequential(
+                    nn.Linear(dim, mlp_dim),
+                    nn.GELU(),
+                    nn.Linear(mlp_dim, dim),
+                    nn.Dropout(0.1)
+                )
+            self.layers.append(nn.ModuleList([
+                nn.LayerNorm(dim),
+                nn.MultiheadAttention(dim, heads, dropout=0.1, batch_first=True),
+                nn.LayerNorm(dim),
+                ffn
+            ]))
+        
+        self.norm = nn.LayerNorm(dim)
+        self.head = nn.Linear(dim, num_classes)
+    
+    def forward(self, x):
+        B = x.shape[0]
+        x = self.patch_embed(x).flatten(2).transpose(1, 2)  # B, num_patches, dim
+        cls_tokens = self.cls_token.expand(B, -1, -1)
+        x = torch.cat((cls_tokens, x), dim=1)
+        x = x + self.pos_embed
+        
+        for norm1, attn, norm2, ffn in self.layers:
+            x = x + attn(norm1(x), norm1(x), norm1(x))[0]
+            x = x + ffn(norm2(x))
+        
+        x = self.norm(x[:, 0])  # cls token
+        return self.head(x)
+
+# Data
+transform = transforms.Compose([transforms.ToTensor(), transforms.Normalize((0.5,), (0.5,))])
+trainset = torchvision.datasets.CIFAR10(root='./data', train=True, download=True, transform=transform)
+testset = torchvision.datasets.CIFAR10(root='./data', train=False, download=True, transform=transform)
+trainloader = DataLoader(trainset, batch_size=128, shuffle=True, num_workers=2)
+testloader = DataLoader(testset, batch_size=128, shuffle=False, num_workers=2)
+
+# Training function (simple)
+def train_model(use_triality=False, epochs=5):
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    model = TinyViT(use_triality=use_triality).to(device)
+    criterion = nn.CrossEntropyLoss()
+    optimizer = optim.AdamW(model.parameters(), lr=3e-4)
+    
+    for epoch in range(epochs):
+        model.train()
+        running_loss = 0.0
+        for i, (inputs, labels) in enumerate(trainloader):
+            inputs, labels = inputs.to(device), labels.to(device)
+            optimizer.zero_grad()
+            outputs = model(inputs)
+            loss = criterion(outputs, labels)
+            loss.backward()
+            optimizer.step()
+            running_loss += loss.item()
+            if i % 100 == 99:
+                print(f"[{epoch+1}, {i+1}] loss: {running_loss / 100:.3f}")
+                running_loss = 0.0
+    
+    # Quick test acc
+    model.eval()
+    correct, total = 0, 0
+    with torch.no_grad():
+        for inputs, labels in testloader:
+            inputs, labels = inputs.to(device), labels.to(device)
+            outputs = model(inputs)
+            _, predicted = torch.max(outputs.data, 1)
+            total += labels.size(0)
+            correct += (predicted == labels).sum().item()
+    acc = 100 * correct / total
+    print(f"{'Triality' if use_triality else 'Baseline'} Test Acc: {acc:.2f}%")
+    return acc
+
+# Run both
+print("Running baseline...")
+baseline_acc = train_model(use_triality=False, epochs=5)
+
+print("\nRunning with Triality Cycle Block...")
+triality_acc = train_model(use_triality=True, epochs=5)
+
+print(f"\nDelta: Triality {'+' if triality_acc > baseline_acc else '-'} {abs(triality_acc - baseline_acc):.2f}%")

@@ -1,0 +1,9 @@
+torch>=2.0.0
+torchvision
+torchaudio
+numpy
+matplotlib
+# For real datasets (optional, install when ready)
+datasets
+transformers
+tree-sitter  # for code tokenization (The Stack)
