@@ -1,13 +1,16 @@
 # Restart runtime first (Runtime → Restart runtime) for clean memory
 
-!pip install torch torchvision matplotlib numpy pandas
+!pip install torch torchvision matplotlib numpy
 
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import torch.amp
+from torch.utils.checkpoint import checkpoint
+import torchvision
+from torchvision import transforms
+from torchvision.datasets import MNIST
 import numpy as np
-import pandas as pd
 import matplotlib.pyplot as plt
 from contextlib import nullcontext
 import math
@@ -17,39 +20,32 @@ torch.cuda.empty_cache()
 device = 'cuda' if torch.cuda.is_available() else 'cpu'
 print(f"Using device: {device}")
 
-# CONFIG – optimized for Pro A100
+# CONFIG – optimized for speed + stability
 triality = 3
-dim = 768
+dim = 384
 latent_dim = 8
-seq_len = 512  # time steps (daily readings proxy)
-batch_size = 32
-epochs = 20000
+num_tasks = 10
+epochs_per_task = 5000  # reduced — fast now
 lr = 5e-5
 use_amp = True
+use_checkpoint = True
 
-# Real Curiosity Mars weather CSV (The Pudding cleaned NASA data — public, stable)
-url = "https://raw.githubusercontent.com/the-pudding/data/master/mars-weather/mars-weather.csv"
-df = pd.read_csv(url)
+# Permuted MNIST continual benchmark (real handwritten digits)
+transform = transforms.Compose([transforms.ToTensor(), transforms.Normalize((0.1307,), (0.3081,))])
 
-# Proxy features (temp, pressure, wind — normalize)
-features = df[['min_temp', 'max_temp', 'pressure', 'wind_speed']].dropna()
-features = (features - features.min()) / (features.max() - features.min() + 1e-6)  # normalize
-data = torch.from_numpy(features.values).float().to(device)
+train_dataset = MNIST(root="./", train=True, download=True, transform=transform)
+test_dataset = MNIST(root="./", train=False, download=True, transform=transform)
 
-# Pad/crop to batch * seq_len
-data = data[:batch_size * seq_len]
-data = data.view(batch_size, seq_len, -1)  # (batch, seq_len, features)
+train_loader = torch.utils.data.DataLoader(train_dataset, batch_size=128, shuffle=True)
+test_loader = torch.utils.data.DataLoader(test_dataset, batch_size=128, shuffle=False)
 
-# Project to dim
-proj = nn.Linear(data.shape[-1], dim).to(device)
-real_data = proj(data)
-
-# Apply masking (40–70% missing readings — sparse sensors)
-missing = torch.linspace(0.4, 0.7, batch_size * seq_len, device=device).view(batch_size, seq_len, 1)
-mask = torch.rand_like(real_data) < missing
-real_data[mask] = 0
-
-target = proj(data)
+# Create permuted versions for tasks
+tasks = []
+for task_id in range(num_tasks):
+    perm = torch.randperm(28*28)
+    def permute(x):
+        return x.view(-1, 28*28)[:, perm].view(-1, 1, 28, 28)
+    tasks.append(permute)
 
 # E8 roots – precompute
 def get_e8_roots():
@@ -69,8 +65,8 @@ def get_e8_roots():
 
 e8_roots = get_e8_roots().to(device)
 
-# Triality Cycle Block
-class TerraformCycleBlock(nn.Module):
+# Triality Cycle Block (detached step)
+class ContinualCycleBlock(nn.Module):
     def __init__(self):
         super().__init__()
         self.proj = nn.Linear(latent_dim, dim // triality, bias=False)
@@ -80,70 +76,139 @@ class TerraformCycleBlock(nn.Module):
         pos_emb = self.roots[torch.arange(x.shape[1], device=device) % 240]
         low_dim = self.proj(pos_emb)
         emb = low_dim.repeat(1, triality)
-        pump = 0.8 * torch.sin(torch.tensor(step, device=device, dtype=torch.float32) * 0.006 * 2 * math.pi)
+        step_float = float(step)  # detached
+        pump = 0.8 * torch.sin(torch.tensor(step_float, device=device) * 0.006 * 2 * math.pi)
         x_rot1 = x * (emb.cos() + pump)
         x_rot2 = torch.roll(x_rot1, shifts=1, dims=-1) * emb.sin()
         x_rot3 = torch.roll(x_rot2, shifts=1, dims=-1) * emb.cos()
         fused = (x_rot1 + x_rot2 + x_rot3) / triality
         return fused
 
-# Model
-class E8TerraformingFusion(nn.Module):
-    def __init__(self, depth=64):
-        super().__init__()
-        self.cycle = TerraformCycleBlock()
-        self.layers = nn.ModuleList([nn.MultiheadAttention(dim, triality, batch_first=True) for _ in range(depth)])
-        self.norm = nn.LayerNorm(dim)
-        self.head = nn.Linear(dim, dim)
-
-    def forward(self, x, step):
-        x = self.cycle(x, step)
-        for layer in self.layers:
-            attn, _ = layer(x, x, x)
-            x = x + self.norm(attn)
+# Dummy cycle for ablation (ignores step)
+class DummyCycle(nn.Module):
+    def forward(self, x, step=None):
         return x
 
-model = E8TerraformingFusion().to(device)
-model = torch.compile(model)
+# Model with ablation support
+class E8ContinualLongUpdate(nn.Module):
+    def __init__(self, depth=32, use_triality=True):
+        super().__init__()
+        self.use_triality = use_triality
+        self.proj = nn.Linear(784, dim)  # project flattened MNIST to dim
+        self.cycle = ContinualCycleBlock() if use_triality else DummyCycle()
+        self.layers = nn.ModuleList([nn.MultiheadAttention(dim, triality if use_triality else 8, batch_first=True) for _ in range(depth)])
+        self.norm = nn.LayerNorm(dim)
+        self.head = nn.Linear(dim, 10)  # MNIST classes
+
+    def forward(self, x, step):
+        x = x.view(x.size(0), -1)  # flatten to (batch, 784)
+        x = self.proj(x)  # project to dim
+        x = x.unsqueeze(1)  # (batch, 1, dim) for attention
+        x = self.cycle(x, step)
+        for layer in self.layers:
+            if use_checkpoint:
+                attn, _ = checkpoint(layer, x, x, x, use_reentrant=False)
+            else:
+                attn, _ = layer(x, x, x)
+            x = x + self.norm(attn)
+        return self.head(x.mean(dim=1))
+
+# Models
+model = E8ContinualLongUpdate(use_triality=True).to(device)
+
+model_ablation = E8ContinualLongUpdate(use_triality=False).to(device)
 
 opt = torch.optim.AdamW(model.parameters(), lr=lr)
 scaler = torch.amp.GradScaler('cuda') if use_amp else nullcontext()
-loss_fn = nn.MSELoss()
 
-for epoch in range(epochs):
-    opt.zero_grad(set_to_none=True)
+opt_ablation = torch.optim.AdamW(model_ablation.parameters(), lr=lr)
+scaler_ablation = torch.amp.GradScaler('cuda') if use_amp else nullcontext()
 
-    with torch.amp.autocast(device_type='cuda', dtype=torch.float16) if use_amp else nullcontext():
-        recon = model(real_data, epoch)
-        loss = loss_fn(recon, target)
+loss_fn = nn.CrossEntropyLoss()
 
-    scaler.scale(loss).backward() if use_amp else loss.backward()
-    scaler.unscale_(opt) if use_amp else None
-    torch.nn.utils.clip_grad_norm_(model.parameters(), 1e6)
-    scaler.step(opt) if use_amp else opt.step()
-    scaler.update() if use_amp else None
+# Continual training across tasks
+accuracy_hist = {i: [] for i in range(num_tasks)}
+accuracy_abl_hist = {i: [] for i in range(num_tasks)}
 
-    if epoch % 500 == 0:
-        print(f"Epoch {epoch} | Loss {loss.item():.6f}")
+for task_id in range(num_tasks):
+    print(f"\n=== Training on Task {task_id} ===")
+    
+    permute = tasks[task_id]
+    
+    for epoch in range(epochs_per_task):
+        for images, labels in train_loader:
+            images = permute(images).to(device)
+            labels = labels.to(device)
+            
+            opt.zero_grad(set_to_none=True)
+            opt_ablation.zero_grad(set_to_none=True)
 
-# Visualization (sparse vs reconstructed planetary readings proxy)
-with torch.no_grad():
-    recon = model(real_data, 0).cpu()
-    original = real_data.cpu()
+            with torch.amp.autocast(device_type='cuda', dtype=torch.float16) if use_amp else nullcontext():
+                outputs = model(images, task_id * epochs_per_task + epoch)
+                loss = loss_fn(outputs, labels)
 
-num_vis = 8
-fig, axes = plt.subplots(2, num_vis, figsize=(num_vis*2, 6))
-for i in range(num_vis):
-    axes[0, i].imshow(original[i].numpy(), cmap='viridis', aspect='auto')
-    axes[0, i].set_title("Masked Readings")
-    axes[0, i].axis('off')
+                outputs_abl = model_ablation(images, task_id * epochs_per_task + epoch)
+                loss_abl = loss_fn(outputs_abl, labels)
 
-    axes[1, i].imshow(recon[i].numpy(), cmap='viridis', aspect='auto')
-    axes[1, i].set_title("Reconstructed")
-    axes[1, i].axis('off')
+            scaler.scale(loss).backward() if use_amp else loss.backward()
+            scaler.unscale_(opt) if use_amp else None
+            torch.nn.utils.clip_grad_norm_(model.parameters(), 1e6)
+            scaler.step(opt) if use_amp else opt.step()
+            scaler.update() if use_amp else None
 
-plt.suptitle("Mars Terraforming Proxy: Masked vs Triality Reconstructed Sensor Readings")
+            scaler_ablation.scale(loss_abl).backward() if use_amp else loss_abl.backward()
+            scaler_ablation.unscale_(opt_ablation) if use_amp else None
+            torch.nn.utils.clip_grad_norm_(model_ablation.parameters(), 1e6)
+            scaler_ablation.step(opt_ablation) if use_amp else opt_ablation.step()
+            scaler_ablation.update() if use_amp else None
+
+        if epoch % 2000 == 0:
+            print(f"Task {task_id} Epoch {epoch} | Loss {loss.item():.6f}")
+
+    # Test retention on all previous tasks
+    with torch.no_grad():
+        for prev_task in range(task_id + 1):
+            permute_prev = tasks[prev_task]
+            acc = 0
+            acc_abl = 0
+            for images, labels in test_loader:
+                images = permute_prev(images).to(device)
+                labels = labels.to(device)
+
+                outputs = model(images, task_id * epochs_per_task)
+                acc += (outputs.argmax(dim=1) == labels).float().mean().item()
+
+                outputs_abl = model_ablation(images, task_id * epochs_per_task)
+                acc_abl += (outputs_abl.argmax(dim=1) == labels).float().mean().item()
+
+            acc /= len(test_loader)
+            acc_abl /= len(test_loader)
+            accuracy_hist[prev_task].append(acc)
+            accuracy_abl_hist[prev_task].append(acc_abl)
+
+# Sigma Retention Test
+e8_retention = np.mean([accuracy_hist[i][-1] for i in range(num_tasks)])
+abl_retention = np.mean([accuracy_abl_hist[i][-1] for i in range(num_tasks)])
+ret_std = np.std([accuracy_hist[i][-1] for i in range(num_tasks)] + [accuracy_abl_hist[i][-1] for i in range(num_tasks)])
+sigma_retention = (e8_retention - abl_retention) / ret_std if ret_std > 0 else 0
+
+print(f"Final Retention Sigma: {sigma_retention:.2f}")
+
+# Visualization (retention curves)
+plt.figure(figsize=(12,6))
+for task_id in range(num_tasks):
+    plt.plot(accuracy_hist[task_id], label=f'Task {task_id} Triality')
+    plt.plot(accuracy_abl_hist[task_id], label=f'Task {task_id} Ablation', linestyle='--')
+
+plt.title("Continual Long Update: Accuracy Retention Across Tasks")
+plt.xlabel("Task Progress")
+plt.ylabel("Accuracy on Task")
+plt.legend(bbox_to_anchor=(1.05, 1), loc='upper left')
+plt.grid(True)
+plt.text(0.95, 0.95, f"Retention Sigma: {sigma_retention:.2f}", transform=plt.gca().transAxes, ha='right', va='top', bbox=dict(boxstyle="round", fc="white"))
+
 plt.tight_layout()
+plt.savefig("continual_long_update_retention_visualization.png")
 plt.show()
 
-print("Visualization displayed above")
+print("Visualization saved as continual_long_update_retention_visualization.png")
