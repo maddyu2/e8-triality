@@ -32,7 +32,7 @@ print(f"Using device: {device}")
 triality = 3
 dim = 384
 latent_dim = 8
-seq_len = 512  # time steps (driving frames)
+seq_len = 512  # time steps (dust storm sequence)
 batch_size = 64
 epochs = 5000  # reduced for fast run (sigma trend visible early)
 lr = 5e-5
@@ -41,32 +41,30 @@ use_checkpoint = True
 
 checkpoint_dir = "./checkpoints"
 os.makedirs(checkpoint_dir, exist_ok=True)
-checkpoint_path = os.path.join(checkpoint_dir, "fsd_fusion_checkpoint.pth")
+checkpoint_path = os.path.join(checkpoint_dir, "mars_dust_storm_checkpoint.pth")
 
-# Synthetic FSD multi-sensor fusion proxy (camera + lidar + radar features + noise/occlusion)
-features_camera = 128  # vision
-features_lidar = 64   # depth/point cloud
-features_radar = 64   # velocity
+# Synthetic Mars dust storm proxy (vision + lidar features + occlusion/noise)
+features_vision = 128  # camera
+features_lidar = 128   # depth
 
-sensor_data = []
+dust_storm_data = []
 for b in range(batch_size):
     t = torch.linspace(0, 10*math.pi, seq_len, device=device)
     
-    camera = torch.sin(t.unsqueeze(-1) * torch.arange(features_camera, device=device)) * 0.5  # vision patterns
-    lidar = torch.cos(t.unsqueeze(-1) * torch.arange(features_lidar, device=device) * 1.2) * 0.4  # depth
-    radar = torch.sin(t.unsqueeze(-1) * torch.arange(features_radar, device=device) * 1.5) * 0.3  # velocity
+    vision = torch.sin(t.unsqueeze(-1) * torch.arange(features_vision, device=device)) * 0.5  # terrain visibility
+    lidar = torch.cos(t.unsqueeze(-1) * torch.arange(features_lidar, device=device) * 1.2) * 0.4   # depth returns
     
-    frame = torch.cat([camera, lidar, radar], dim=-1)
-    frame += torch.randn_like(frame) * 0.1  # noise
-    sensor_data.append(frame)
+    frame = torch.cat([vision, lidar], dim=-1)
+    frame += torch.randn_like(frame) * 0.15  # dust noise
+    dust_storm_data.append(frame)
 
-sensor_data = torch.stack(sensor_data).to(device)
+dust_storm_data = torch.stack(dust_storm_data).to(device)
 
 # Project to shared dim
-proj = nn.Linear(features_camera + features_lidar + features_radar, dim).to(device)
-clean_data = proj(sensor_data)
+proj = nn.Linear(features_vision + features_lidar, dim).to(device)
+clean_data = proj(dust_storm_data)
 
-# High masking (70–90% — sensor dropout/fog/rain/occlusion proxy)
+# High masking (70–90% — dust occlusion proxy)
 missing_rate = torch.linspace(0.7, 0.9, batch_size, device=device).view(batch_size, 1, 1)
 mask = torch.rand_like(clean_data) < missing_rate
 real_data = clean_data.clone()
@@ -93,7 +91,7 @@ def get_e8_roots():
 e8_roots = get_e8_roots().to(device)
 
 # Triality Cycle Block (detached pump scalar)
-class FSDCycleBlock(nn.Module):
+class DustStormCycleBlock(nn.Module):
     def __init__(self):
         super().__init__()
         self.proj = nn.Linear(latent_dim, dim // triality, bias=False)
@@ -119,11 +117,11 @@ class DummyCycle(nn.Module):
         return x
 
 # Model with ablation support
-class E8FSDFusion(nn.Module):
+class E8DustStormFusion(nn.Module):
     def __init__(self, depth=32, use_triality=True):
         super().__init__()
         self.use_triality = use_triality
-        self.cycle = FSDCycleBlock() if use_triality else DummyCycle()
+        self.cycle = DustStormCycleBlock() if use_triality else DummyCycle()
         self.layers = nn.ModuleList([nn.MultiheadAttention(dim, triality if use_triality else 8, batch_first=True) for _ in range(depth)])
         self.norm = nn.LayerNorm(dim)
         self.head = nn.Linear(dim, dim)
@@ -140,8 +138,8 @@ class E8FSDFusion(nn.Module):
         return x
 
 # Models
-model = E8FSDFusion(use_triality=True).to(device)
-model_ablation = E8FSDFusion(use_triality=False).to(device)
+model = E8DustStormFusion(use_triality=True).to(device)
+model_ablation = E8DustStormFusion(use_triality=False).to(device)
 
 opt = torch.optim.AdamW(model.parameters(), lr=lr)
 scaler = torch.amp.GradScaler('cuda') if use_amp else nullcontext()
@@ -222,7 +220,7 @@ sigma = (abl_mean - triality_mean) / std if std > 0 else 0
 
 print(f"Final Sigma (Triality vs Ablation): {sigma:.2f} (higher = triality advantage)")
 
-# Visualization: Sensor Feature Time Series (camera proxy)
+# Visualization: Visibility Feature Reconstruction (first vision channel proxy)
 model.eval()
 model_ablation.eval()
 
@@ -231,10 +229,10 @@ with torch.no_grad():
     test_data = []
     for b in range(8):
         t = torch.linspace(0, 10*math.pi, seq_len, device=device)
-        camera = torch.sin(t.unsqueeze(-1) * torch.arange(features_camera, device=device)) * 0.5
+        vision = torch.sin(t.unsqueeze(-1) * torch.arange(features_vision, device=device)) * 0.5
         lidar = torch.cos(t.unsqueeze(-1) * torch.arange(features_lidar, device=device) * 1.2) * 0.4
-        radar = torch.sin(t.unsqueeze(-1) * torch.arange(features_radar, device=device) * 1.5) * 0.3
-        frame = torch.cat([camera, lidar, radar], dim=-1)
+        frame = torch.cat([vision, lidar], dim=-1)
+        frame += torch.randn_like(frame) * 0.15
         test_data.append(frame)
     test_data = torch.stack(test_data).to(device)
 
@@ -247,7 +245,7 @@ with torch.no_grad():
     recon = model(masked, 0)
     recon_abl = model_ablation(masked, 0)
 
-    # Plot first camera feature channel (vision proxy)
+    # Plot first vision feature channel (visibility proxy)
     orig = clean.cpu().numpy()[:, :, 0]
     masked_plot = masked.cpu().numpy()[:, :, 0]
     tri = recon.cpu().numpy()[:, :, 0]
@@ -256,14 +254,14 @@ with torch.no_grad():
     fig, axes = plt.subplots(4, 8, figsize=(16, 8))
     for i in range(8):
         axes[0, i].plot(orig[i])
-        axes[0, i].set_title("Original Vision")
+        axes[0, i].set_title("Original Visibility")
         axes[1, i].plot(masked_plot[i])
         axes[1, i].set_title("Masked (80%)")
         axes[2, i].plot(tri[i])
         axes[2, i].set_title("Triality Recon")
         axes[3, i].plot(abl[i])
         axes[3, i].set_title("Ablation Recon")
-    plt.suptitle("E8 Triality FSD Sensor Fusion Visualization (Vision Feature Proxy)")
+    plt.suptitle("E8 Triality Mars Dust Storm Navigation Visualization")
     plt.tight_layout()
     plt.show()
 

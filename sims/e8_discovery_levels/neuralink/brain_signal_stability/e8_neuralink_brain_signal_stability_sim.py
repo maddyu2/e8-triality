@@ -11,7 +11,7 @@ print("Keep-alive activated — no disconnect curse")
 
 !pip install torch matplotlib numpy
 
-# Second cell: The sim code (optimized — 5000 epochs, checkpoints, progress prints + visualization)
+# Second cell: The sim code (optimized — 5000 epochs, larger batch, single backward)
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -21,7 +21,6 @@ import numpy as np
 from contextlib import nullcontext
 import math
 import os
-import matplotlib.pyplot as plt
 
 torch.cuda.empty_cache()
 
@@ -32,7 +31,7 @@ print(f"Using device: {device}")
 triality = 3
 dim = 384
 latent_dim = 8
-seq_len = 512  # time steps (driving frames)
+seq_len = 1024  # time steps (spike train length)
 batch_size = 64
 epochs = 5000  # reduced for fast run (sigma trend visible early)
 lr = 5e-5
@@ -41,32 +40,29 @@ use_checkpoint = True
 
 checkpoint_dir = "./checkpoints"
 os.makedirs(checkpoint_dir, exist_ok=True)
-checkpoint_path = os.path.join(checkpoint_dir, "fsd_fusion_checkpoint.pth")
+checkpoint_path = os.path.join(checkpoint_dir, "neuralink_brain_signal_checkpoint.pth")
 
-# Synthetic FSD multi-sensor fusion proxy (camera + lidar + radar features + noise/occlusion)
-features_camera = 128  # vision
-features_lidar = 64   # depth/point cloud
-features_radar = 64   # velocity
+# Synthetic Neuralink brain signal stability proxy (multi-channel spikes + drift/noise/occlusion)
+channels = 128  # multi-electrode proxy
 
-sensor_data = []
+brain_signals = []
 for b in range(batch_size):
     t = torch.linspace(0, 10*math.pi, seq_len, device=device)
-    
-    camera = torch.sin(t.unsqueeze(-1) * torch.arange(features_camera, device=device)) * 0.5  # vision patterns
-    lidar = torch.cos(t.unsqueeze(-1) * torch.arange(features_lidar, device=device) * 1.2) * 0.4  # depth
-    radar = torch.sin(t.unsqueeze(-1) * torch.arange(features_radar, device=device) * 1.5) * 0.3  # velocity
-    
-    frame = torch.cat([camera, lidar, radar], dim=-1)
-    frame += torch.randn_like(frame) * 0.1  # noise
-    sensor_data.append(frame)
+    # Correlated spike patterns (thought-like)
+    base = torch.sin(t.unsqueeze(-1) * torch.arange(channels, device=device)) * 0.5
+    # Electrode drift over time
+    drift = torch.linspace(0, 0.4, seq_len, device=device).unsqueeze(-1) * torch.randn(channels, device=device)
+    signals = base + drift
+    signals += torch.randn_like(signals) * 0.15  # noise
+    brain_signals.append(signals)
 
-sensor_data = torch.stack(sensor_data).to(device)
+brain_signals = torch.stack(brain_signals).to(device)
 
-# Project to shared dim
-proj = nn.Linear(features_camera + features_lidar + features_radar, dim).to(device)
-clean_data = proj(sensor_data)
+# Project to dim
+proj = nn.Linear(channels, dim).to(device)
+clean_data = proj(brain_signals)
 
-# High masking (70–90% — sensor dropout/fog/rain/occlusion proxy)
+# High masking (70–90% — electrode dropout/decoding gaps proxy)
 missing_rate = torch.linspace(0.7, 0.9, batch_size, device=device).view(batch_size, 1, 1)
 mask = torch.rand_like(clean_data) < missing_rate
 real_data = clean_data.clone()
@@ -93,7 +89,7 @@ def get_e8_roots():
 e8_roots = get_e8_roots().to(device)
 
 # Triality Cycle Block (detached pump scalar)
-class FSDCycleBlock(nn.Module):
+class BrainCycleBlock(nn.Module):
     def __init__(self):
         super().__init__()
         self.proj = nn.Linear(latent_dim, dim // triality, bias=False)
@@ -119,11 +115,11 @@ class DummyCycle(nn.Module):
         return x
 
 # Model with ablation support
-class E8FSDFusion(nn.Module):
+class E8BrainFusion(nn.Module):
     def __init__(self, depth=32, use_triality=True):
         super().__init__()
         self.use_triality = use_triality
-        self.cycle = FSDCycleBlock() if use_triality else DummyCycle()
+        self.cycle = BrainCycleBlock() if use_triality else DummyCycle()
         self.layers = nn.ModuleList([nn.MultiheadAttention(dim, triality if use_triality else 8, batch_first=True) for _ in range(depth)])
         self.norm = nn.LayerNorm(dim)
         self.head = nn.Linear(dim, dim)
@@ -140,8 +136,8 @@ class E8FSDFusion(nn.Module):
         return x
 
 # Models
-model = E8FSDFusion(use_triality=True).to(device)
-model_ablation = E8FSDFusion(use_triality=False).to(device)
+model = E8BrainFusion(use_triality=True).to(device)
+model_ablation = E8BrainFusion(use_triality=False).to(device)
 
 opt = torch.optim.AdamW(model.parameters(), lr=lr)
 scaler = torch.amp.GradScaler('cuda') if use_amp else nullcontext()
@@ -222,49 +218,4 @@ sigma = (abl_mean - triality_mean) / std if std > 0 else 0
 
 print(f"Final Sigma (Triality vs Ablation): {sigma:.2f} (higher = triality advantage)")
 
-# Visualization: Sensor Feature Time Series (camera proxy)
-model.eval()
-model_ablation.eval()
-
-with torch.no_grad():
-    # Fresh test batch for viz
-    test_data = []
-    for b in range(8):
-        t = torch.linspace(0, 10*math.pi, seq_len, device=device)
-        camera = torch.sin(t.unsqueeze(-1) * torch.arange(features_camera, device=device)) * 0.5
-        lidar = torch.cos(t.unsqueeze(-1) * torch.arange(features_lidar, device=device) * 1.2) * 0.4
-        radar = torch.sin(t.unsqueeze(-1) * torch.arange(features_radar, device=device) * 1.5) * 0.3
-        frame = torch.cat([camera, lidar, radar], dim=-1)
-        test_data.append(frame)
-    test_data = torch.stack(test_data).to(device)
-
-    clean = proj(test_data)
-
-    mask = torch.rand_like(clean) < 0.8
-    masked = clean.clone()
-    masked[mask] = 0
-
-    recon = model(masked, 0)
-    recon_abl = model_ablation(masked, 0)
-
-    # Plot first camera feature channel (vision proxy)
-    orig = clean.cpu().numpy()[:, :, 0]
-    masked_plot = masked.cpu().numpy()[:, :, 0]
-    tri = recon.cpu().numpy()[:, :, 0]
-    abl = recon_abl.cpu().numpy()[:, :, 0]
-
-    fig, axes = plt.subplots(4, 8, figsize=(16, 8))
-    for i in range(8):
-        axes[0, i].plot(orig[i])
-        axes[0, i].set_title("Original Vision")
-        axes[1, i].plot(masked_plot[i])
-        axes[1, i].set_title("Masked (80%)")
-        axes[2, i].plot(tri[i])
-        axes[2, i].set_title("Triality Recon")
-        axes[3, i].plot(abl[i])
-        axes[3, i].set_title("Ablation Recon")
-    plt.suptitle("E8 Triality FSD Sensor Fusion Visualization (Vision Feature Proxy)")
-    plt.tight_layout()
-    plt.show()
-
-print("Sim complete — visualization displayed!")
+print("Sim complete — epochs + sigma test done")
