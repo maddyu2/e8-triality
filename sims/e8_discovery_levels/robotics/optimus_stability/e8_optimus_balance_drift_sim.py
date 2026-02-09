@@ -33,7 +33,7 @@ print(f"Using device: {device}")
 triality = 3
 dim = 384
 latent_dim = 8
-seq_len = 1024  # time steps (manipulation sequence)
+seq_len = 1024  # time steps (balance sequence)
 batch_size = 64
 epochs = 3000  # reduced for fast run (sigma trend visible early)
 lr = 5e-5
@@ -42,31 +42,30 @@ use_checkpoint = True
 
 checkpoint_dir = "./checkpoints"
 os.makedirs(checkpoint_dir, exist_ok=True)
-checkpoint_path = os.path.join(checkpoint_dir, "optimus_arm_checkpoint.pth")
+checkpoint_path = os.path.join(checkpoint_dir, "optimus_balance_checkpoint.pth")
 
-# Synthetic Optimus arm manipulation proxy (proprioceptive joints + vision features + noise/occlusion)
-features_proprio = 128  # joint angles/torques/positions
-features_vision = 128   # camera features (object pose)
+# Synthetic Optimus balance drift proxy (proprioceptive joint states + perturbations)
+features_proprio = 128  # joint angles/velocities/torques
 
-arm_data = []
+balance_data = []
 for b in range(batch_size):
     t = torch.linspace(0, 10*math.pi, seq_len, device=device)
     
-    # Coherent arm motion (reach/grasp patterns)
-    proprio = torch.sin(t.unsqueeze(-1) * torch.arange(features_proprio, device=device)) * 0.5
-    vision = torch.cos(t.unsqueeze(-1) * torch.arange(features_vision, device=device) * 1.2) * 0.4  # aligned object view
+    # Coherent balance trajectory (stable bipedal gait)
+    balance = torch.sin(t.unsqueeze(-1) * torch.arange(features_proprio, device=device)) * 0.5
     
-    frame = torch.cat([proprio, vision], dim=-1)
-    frame += torch.randn_like(frame) * 0.1  # noise
-    arm_data.append(frame)
+    # Perturbations (pushes/uneven terrain proxy)
+    balance += torch.randn_like(balance) * 0.2
+    
+    balance_data.append(balance)
 
-arm_data = torch.stack(arm_data).to(device)
+balance_data = torch.stack(balance_data).to(device)
 
 # Project to shared dim
-proj = nn.Linear(features_proprio + features_vision, dim).to(device)
-clean_data = proj(arm_data)
+proj = nn.Linear(features_proprio, dim).to(device)
+clean_data = proj(balance_data)
 
-# High masking (70–90% — occlusion/clutter proxy)
+# High masking (70–90% — sensor dropout/perturbation proxy)
 missing_rate = torch.linspace(0.7, 0.9, batch_size, device=device).view(batch_size, 1, 1)
 mask = torch.rand_like(clean_data) < missing_rate
 real_data = clean_data.clone()
@@ -93,7 +92,7 @@ def get_e8_roots():
 e8_roots = get_e8_roots().to(device)
 
 # Triality Cycle Block (detached pump scalar)
-class OptimusCycleBlock(nn.Module):
+class BalanceCycleBlock(nn.Module):
     def __init__(self):
         super().__init__()
         self.proj = nn.Linear(latent_dim, dim // triality, bias=False)
@@ -119,11 +118,11 @@ class DummyCycle(nn.Module):
         return x
 
 # Model with ablation support
-class E8OptimusFusion(nn.Module):
+class E8BalanceFusion(nn.Module):
     def __init__(self, depth=32, use_triality=True):
         super().__init__()
         self.use_triality = use_triality
-        self.cycle = OptimusCycleBlock() if use_triality else DummyCycle()
+        self.cycle = BalanceCycleBlock() if use_triality else DummyCycle()
         self.layers = nn.ModuleList([nn.MultiheadAttention(dim, triality if use_triality else 8, batch_first=True) for _ in range(depth)])
         self.norm = nn.LayerNorm(dim)
         self.head = nn.Linear(dim, dim)
@@ -140,8 +139,8 @@ class E8OptimusFusion(nn.Module):
         return x
 
 # Models
-model = E8OptimusFusion(use_triality=True).to(device)
-model_ablation = E8OptimusFusion(use_triality=False).to(device)
+model = E8BalanceFusion(use_triality=True).to(device)
+model_ablation = E8BalanceFusion(use_triality=False).to(device)
 
 opt = torch.optim.AdamW(model.parameters(), lr=lr)
 scaler = torch.amp.GradScaler('cuda') if use_amp else nullcontext()
@@ -228,7 +227,7 @@ sigma = (abl_mean - triality_mean) / std if std > 0 else 0
 
 print(f"Final Sigma (Triality vs Ablation): {sigma:.2f} (higher = triality advantage)")
 
-# Visualization: Arm Joint Trajectory Reconstruction (first proprio feature channel proxy)
+# Visualization: Joint Trajectory Reconstruction (first feature channel proxy)
 model.eval()
 model_ablation.eval()
 
@@ -237,11 +236,9 @@ with torch.no_grad():
     test_data = []
     for b in range(8):
         t = torch.linspace(0, 10*math.pi, seq_len, device=device)
-        proprio = torch.sin(t.unsqueeze(-1) * torch.arange(features_proprio, device=device)) * 0.5
-        vision = torch.cos(t.unsqueeze(-1) * torch.arange(features_vision, device=device) * 1.2) * 0.4
-        frame = torch.cat([proprio, vision], dim=-1)
-        frame += torch.randn_like(frame) * 0.1
-        test_data.append(frame)
+        balance = torch.sin(t.unsqueeze(-1) * torch.arange(features_proprio, device=device)) * 0.5
+        balance += torch.randn_like(balance) * 0.2
+        test_data.append(balance)
     test_data = torch.stack(test_data).to(device)
 
     clean = proj(test_data)
@@ -253,7 +250,7 @@ with torch.no_grad():
     recon = model(masked, 0)
     recon_abl = model_ablation(masked, 0)
 
-    # Plot first proprio feature channel (joint angle proxy)
+    # Plot first joint feature channel (angle proxy)
     orig = clean.cpu().numpy()[:, :, 0]
     masked_plot = masked.cpu().numpy()[:, :, 0]
     tri = recon.cpu().numpy()[:, :, 0]
@@ -269,7 +266,7 @@ with torch.no_grad():
         axes[2, i].set_title("Triality Recon")
         axes[3, i].plot(abl[i])
         axes[3, i].set_title("Ablation Recon")
-    plt.suptitle("E8 Triality Optimus Arm Manipulation Visualization")
+    plt.suptitle("E8 Triality Optimus Balance Drift Visualization")
     plt.tight_layout()
     plt.show()
 
