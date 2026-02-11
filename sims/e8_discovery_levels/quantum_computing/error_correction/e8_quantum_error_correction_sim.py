@@ -33,7 +33,7 @@ print(f"Using device: {device}")
 triality = 3
 dim = 384
 latent_dim = 8
-seq_len = 1024  # input sequence length
+seq_len = 1024  # time steps (qubit measurement sequence)
 batch_size = 64
 epochs = 3000  # reduced for fast run (sigma trend visible early)
 lr = 5e-5
@@ -42,40 +42,40 @@ use_checkpoint = True
 
 checkpoint_dir = "./checkpoints"
 os.makedirs(checkpoint_dir, exist_ok=True)
-checkpoint_path = os.path.join(checkpoint_dir, "adversarial_attack_checkpoint.pth")
+checkpoint_path = os.path.join(checkpoint_dir, "quantum_error_correction_checkpoint.pth")
 
-# Synthetic AI adversarial attack proxy (clean inputs + perturbations + noise/occlusion)
-features_input = 128  # reasoning/vision proxy
+# Synthetic quantum error correction proxy (qubit states + errors + noise/occlusion)
+features_qubit = 128
 
-input_data = []
+qubit_data = []
 for b in range(batch_size):
     t = torch.linspace(0, 10*math.pi, seq_len, device=device)
     
-    # Coherent "clean" input (reasoning patterns)
-    clean = torch.sin(t.unsqueeze(-1) * torch.arange(features_input, device=device)) * 0.5
+    # Coherent qubit state (superposition proxy)
+    clean = torch.sin(t.unsqueeze(-1) * torch.arange(features_qubit, device=device)) * 0.5
     
-    # Adversarial perturbation (targeted noise proxy)
-    adv = torch.randn_like(clean) * 0.3  # strong attack
+    # Errors (bit flips, phase flips proxy)
+    error_mask = torch.rand(seq_len, features_qubit, device=device) < 0.15  # 15% error rate
+    errored = clean.clone()
+    errored[error_mask] = -errored[error_mask]  # flip errors
+    errored += torch.randn_like(errored) * 0.1  # noise
     
-    attacked = clean + adv
-    
-    input_data.append(attacked)
+    qubit_data.append(errored)
 
-input_data = torch.stack(input_data).to(device)
-clean_target = torch.stack([torch.sin(t.unsqueeze(-1) * torch.arange(features_input, device=device)) * 0.5 for _ in range(batch_size)]).to(device)
+qubit_data = torch.stack(qubit_data).to(device)
 
 # Project to shared dim
-proj = nn.Linear(features_input, dim).to(device)
-clean_data = proj(clean_target)
-attacked_data = proj(input_data)
+proj = nn.Linear(features_qubit, dim).to(device)
+clean_data = proj(torch.stack([torch.sin(t.unsqueeze(-1) * torch.arange(features_qubit, device=device)) * 0.5 for _ in range(batch_size)]).to(device))
+errored_data = proj(qubit_data)
 
-# High masking (70–90% — additional occlusion proxy)
+# High masking (70–90% — measurement gaps proxy)
 missing_rate = torch.linspace(0.7, 0.9, batch_size, device=device).view(batch_size, 1, 1)
-mask = torch.rand_like(attacked_data) < missing_rate
-real_data = attacked_data.clone()
+mask = torch.rand_like(errored_data) < missing_rate
+real_data = errored_data.clone()
 real_data[mask] = 0
 
-target = clean_data
+target = clean_data  # goal: recover clean coherent state
 
 # E8 roots – precompute
 def get_e8_roots():
@@ -95,8 +95,8 @@ def get_e8_roots():
 
 e8_roots = get_e8_roots().to(device)
 
-# Triality Cycle Block (detached pump scalar)
-class AdversarialCycleBlock(nn.Module):
+# Triality Cycle Block
+class QECCycleBlock(nn.Module):
     def __init__(self):
         super().__init__()
         self.proj = nn.Linear(latent_dim, dim // triality, bias=False)
@@ -122,11 +122,11 @@ class DummyCycle(nn.Module):
         return x
 
 # Model with ablation support
-class E8AdversarialFusion(nn.Module):
+class E8QECFusion(nn.Module):
     def __init__(self, depth=32, use_triality=True):
         super().__init__()
         self.use_triality = use_triality
-        self.cycle = AdversarialCycleBlock() if use_triality else DummyCycle()
+        self.cycle = QECCycleBlock() if use_triality else DummyCycle()
         self.layers = nn.ModuleList([nn.MultiheadAttention(dim, triality if use_triality else 8, batch_first=True) for _ in range(depth)])
         self.norm = nn.LayerNorm(dim)
         self.head = nn.Linear(dim, dim)
@@ -143,8 +143,8 @@ class E8AdversarialFusion(nn.Module):
         return x
 
 # Models
-model = E8AdversarialFusion(use_triality=True).to(device)
-model_ablation = E8AdversarialFusion(use_triality=False).to(device)
+model = E8QECFusion(use_triality=True).to(device)
+model_ablation = E8QECFusion(use_triality=False).to(device)
 
 opt = torch.optim.AdamW(model.parameters(), lr=lr)
 scaler = torch.amp.GradScaler('cuda') if use_amp else nullcontext()
@@ -231,7 +231,7 @@ sigma = (abl_mean - triality_mean) / std if std > 0 else 0
 
 print(f"Final Sigma (Triality vs Ablation): {sigma:.2f} (higher = triality advantage)")
 
-# Visualization: Input Reconstruction (first feature channel proxy)
+# Visualization: Qubit State Reconstruction (first feature channel proxy)
 model.eval()
 model_ablation.eval()
 
@@ -240,39 +240,41 @@ with torch.no_grad():
     test_data = []
     for b in range(8):
         t = torch.linspace(0, 10*math.pi, seq_len, device=device)
-        clean = torch.sin(t.unsqueeze(-1) * torch.arange(features_input, device=device)) * 0.5
-        adv = torch.randn_like(clean) * 0.3
-        attacked = clean + adv
-        test_data.append(attacked)
+        clean = torch.sin(t.unsqueeze(-1) * torch.arange(features_qubit, device=device)) * 0.5
+        error_mask = torch.rand(seq_len, features_qubit, device=device) < 0.15
+        errored = clean.clone()
+        errored[error_mask] = -errored[error_mask]
+        errored += torch.randn_like(errored) * 0.1
+        test_data.append(errored)
     test_data = torch.stack(test_data).to(device)
 
-    clean = proj(torch.stack([torch.sin(t.unsqueeze(-1) * torch.arange(features_input, device=device)) * 0.5 for _ in range(8)]).to(device))
-    attacked = proj(test_data)
+    clean = proj(torch.stack([torch.sin(t.unsqueeze(-1) * torch.arange(features_qubit, device=device)) * 0.5 for _ in range(8)]).to(device))
+    errored = proj(test_data)
 
-    mask = torch.rand_like(attacked) < 0.8
-    masked = attacked.clone()
+    mask = torch.rand_like(errored) < 0.8
+    masked = errored.clone()
     masked[mask] = 0
 
     recon = model(masked, 0)
     recon_abl = model_ablation(masked, 0)
 
-    # Plot first input feature channel (reasoning proxy)
+    # Plot first qubit feature channel (state proxy)
     orig = clean.cpu().numpy()[:, :, 0]
-    attacked_plot = attacked.cpu().numpy()[:, :, 0]
+    errored_plot = errored.cpu().numpy()[:, :, 0]
     tri = recon.cpu().numpy()[:, :, 0]
     abl = recon_abl.cpu().numpy()[:, :, 0]
 
     fig, axes = plt.subplots(4, 8, figsize=(16, 8))
     for i in range(8):
         axes[0, i].plot(orig[i])
-        axes[0, i].set_title("Original Input")
-        axes[1, i].plot(attacked_plot[i])
-        axes[1, i].set_title("Adversarial Attack")
+        axes[0, i].set_title("Original Qubit")
+        axes[1, i].plot(errored_plot[i])
+        axes[1, i].set_title("Error + Noise")
         axes[2, i].plot(tri[i])
-        axes[2, i].set_title("Triality Defense")
+        axes[2, i].set_title("Triality Correction")
         axes[3, i].plot(abl[i])
-        axes[3, i].set_title("Ablation (Vulnerable)")
-    plt.suptitle("E8 Triality AI Adversarial Attack Defense Visualization")
+        axes[3, i].set_title("Ablation (Drifted)")
+    plt.suptitle("E8 Triality Quantum Error Correction Visualization")
     plt.tight_layout()
     plt.show()
 

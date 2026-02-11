@@ -33,7 +33,7 @@ print(f"Using device: {device}")
 triality = 3
 dim = 384
 latent_dim = 8
-seq_len = 1024  # input sequence length
+seq_len = 1024  # time steps (agent reasoning/tool sequence)
 batch_size = 64
 epochs = 3000  # reduced for fast run (sigma trend visible early)
 lr = 5e-5
@@ -42,37 +42,33 @@ use_checkpoint = True
 
 checkpoint_dir = "./checkpoints"
 os.makedirs(checkpoint_dir, exist_ok=True)
-checkpoint_path = os.path.join(checkpoint_dir, "adversarial_attack_checkpoint.pth")
+checkpoint_path = os.path.join(checkpoint_dir, "ai_agent_drift_checkpoint.pth")
 
-# Synthetic AI adversarial attack proxy (clean inputs + perturbations + noise/occlusion)
-features_input = 128  # reasoning/vision proxy
+# Synthetic AI agent drift proxy (reasoning/tool call sequences + noise/occlusion)
+features_agent = 128  # "thought" vectors proxy
 
-input_data = []
+agent_data = []
 for b in range(batch_size):
     t = torch.linspace(0, 10*math.pi, seq_len, device=device)
     
-    # Coherent "clean" input (reasoning patterns)
-    clean = torch.sin(t.unsqueeze(-1) * torch.arange(features_input, device=device)) * 0.5
+    # Coherent agent trajectory (multi-hop reasoning patterns)
+    agent = torch.sin(t.unsqueeze(-1) * torch.arange(features_agent, device=device)) * 0.5
     
-    # Adversarial perturbation (targeted noise proxy)
-    adv = torch.randn_like(clean) * 0.3  # strong attack
+    # Drift perturbations (partial context/noise proxy)
+    agent += torch.randn_like(agent) * 0.2
     
-    attacked = clean + adv
-    
-    input_data.append(attacked)
+    agent_data.append(agent)
 
-input_data = torch.stack(input_data).to(device)
-clean_target = torch.stack([torch.sin(t.unsqueeze(-1) * torch.arange(features_input, device=device)) * 0.5 for _ in range(batch_size)]).to(device)
+agent_data = torch.stack(agent_data).to(device)
 
 # Project to shared dim
-proj = nn.Linear(features_input, dim).to(device)
-clean_data = proj(clean_target)
-attacked_data = proj(input_data)
+proj = nn.Linear(features_agent, dim).to(device)
+clean_data = proj(agent_data)
 
-# High masking (70–90% — additional occlusion proxy)
+# High masking (70–90% — partial context/tool error proxy)
 missing_rate = torch.linspace(0.7, 0.9, batch_size, device=device).view(batch_size, 1, 1)
-mask = torch.rand_like(attacked_data) < missing_rate
-real_data = attacked_data.clone()
+mask = torch.rand_like(clean_data) < missing_rate
+real_data = clean_data.clone()
 real_data[mask] = 0
 
 target = clean_data
@@ -96,7 +92,7 @@ def get_e8_roots():
 e8_roots = get_e8_roots().to(device)
 
 # Triality Cycle Block (detached pump scalar)
-class AdversarialCycleBlock(nn.Module):
+class AgentCycleBlock(nn.Module):
     def __init__(self):
         super().__init__()
         self.proj = nn.Linear(latent_dim, dim // triality, bias=False)
@@ -122,11 +118,11 @@ class DummyCycle(nn.Module):
         return x
 
 # Model with ablation support
-class E8AdversarialFusion(nn.Module):
+class E8AgentFusion(nn.Module):
     def __init__(self, depth=32, use_triality=True):
         super().__init__()
         self.use_triality = use_triality
-        self.cycle = AdversarialCycleBlock() if use_triality else DummyCycle()
+        self.cycle = AgentCycleBlock() if use_triality else DummyCycle()
         self.layers = nn.ModuleList([nn.MultiheadAttention(dim, triality if use_triality else 8, batch_first=True) for _ in range(depth)])
         self.norm = nn.LayerNorm(dim)
         self.head = nn.Linear(dim, dim)
@@ -143,8 +139,8 @@ class E8AdversarialFusion(nn.Module):
         return x
 
 # Models
-model = E8AdversarialFusion(use_triality=True).to(device)
-model_ablation = E8AdversarialFusion(use_triality=False).to(device)
+model = E8AgentFusion(use_triality=True).to(device)
+model_ablation = E8AgentFusion(use_triality=False).to(device)
 
 opt = torch.optim.AdamW(model.parameters(), lr=lr)
 scaler = torch.amp.GradScaler('cuda') if use_amp else nullcontext()
@@ -231,7 +227,7 @@ sigma = (abl_mean - triality_mean) / std if std > 0 else 0
 
 print(f"Final Sigma (Triality vs Ablation): {sigma:.2f} (higher = triality advantage)")
 
-# Visualization: Input Reconstruction (first feature channel proxy)
+# Visualization: Agent Trajectory Reconstruction (first feature channel proxy)
 model.eval()
 model_ablation.eval()
 
@@ -240,39 +236,37 @@ with torch.no_grad():
     test_data = []
     for b in range(8):
         t = torch.linspace(0, 10*math.pi, seq_len, device=device)
-        clean = torch.sin(t.unsqueeze(-1) * torch.arange(features_input, device=device)) * 0.5
-        adv = torch.randn_like(clean) * 0.3
-        attacked = clean + adv
-        test_data.append(attacked)
+        agent = torch.sin(t.unsqueeze(-1) * torch.arange(features_agent, device=device)) * 0.5
+        agent += torch.randn_like(agent) * 0.2
+        test_data.append(agent)
     test_data = torch.stack(test_data).to(device)
 
-    clean = proj(torch.stack([torch.sin(t.unsqueeze(-1) * torch.arange(features_input, device=device)) * 0.5 for _ in range(8)]).to(device))
-    attacked = proj(test_data)
+    clean = proj(test_data)
 
-    mask = torch.rand_like(attacked) < 0.8
-    masked = attacked.clone()
+    mask = torch.rand_like(clean) < 0.8
+    masked = clean.clone()
     masked[mask] = 0
 
     recon = model(masked, 0)
     recon_abl = model_ablation(masked, 0)
 
-    # Plot first input feature channel (reasoning proxy)
+    # Plot first agent feature channel (reasoning proxy)
     orig = clean.cpu().numpy()[:, :, 0]
-    attacked_plot = attacked.cpu().numpy()[:, :, 0]
+    masked_plot = masked.cpu().numpy()[:, :, 0]
     tri = recon.cpu().numpy()[:, :, 0]
     abl = recon_abl.cpu().numpy()[:, :, 0]
 
     fig, axes = plt.subplots(4, 8, figsize=(16, 8))
     for i in range(8):
         axes[0, i].plot(orig[i])
-        axes[0, i].set_title("Original Input")
-        axes[1, i].plot(attacked_plot[i])
-        axes[1, i].set_title("Adversarial Attack")
+        axes[0, i].set_title("Original Agent")
+        axes[1, i].plot(masked_plot[i])
+        axes[1, i].set_title("Masked (80%)")
         axes[2, i].plot(tri[i])
-        axes[2, i].set_title("Triality Defense")
+        axes[2, i].set_title("Triality Recon")
         axes[3, i].plot(abl[i])
-        axes[3, i].set_title("Ablation (Vulnerable)")
-    plt.suptitle("E8 Triality AI Adversarial Attack Defense Visualization")
+        axes[3, i].set_title("Ablation Recon")
+    plt.suptitle("E8 Triality AI Agent Drift Shield Visualization")
     plt.tight_layout()
     plt.show()
 
